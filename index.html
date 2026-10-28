@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tomato Disease Detector</title>
+
+<!-- ============ PART 1: CSS (styling) ============ -->
+<style>
+  :root { --green:#2e7d32; --light:#e8f5e9; --text:#1b1b1b; --bg:#f6faf6; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,Arial,sans-serif; background:var(--bg); color:var(--text); }
+  header { background:var(--green); color:#fff; padding:16px; text-align:center; }
+  main { max-width:520px; margin:auto; padding:16px; }
+  .card { background:#fff; border-radius:12px; padding:16px; box-shadow:0 2px 8px #0001; margin-bottom:16px; }
+  input[type=file] { width:100%; }
+  img#preview { max-width:100%; border-radius:8px; margin-top:12px; display:none; }
+  button { background:var(--green); color:#fff; border:0; padding:12px 18px; border-radius:8px; font-size:16px; width:100%; margin-top:12px; cursor:pointer; }
+  button:disabled { opacity:.5; }
+  .bar { background:#ddd; border-radius:6px; height:10px; margin:4px 0 10px; overflow:hidden; }
+  .bar div { background:var(--green); height:100%; width:0; transition:width .4s; }
+  #status { color:#666; font-size:14px; }
+  .result { background:var(--light); padding:12px; border-radius:8px; margin-top:12px; }
+</style>
+</head>
+
+<body>
+
+<!-- ============ PART 2: HTML (page layout) ============ -->
+<header><h1>🍅 Tomato Disease Detector</h1></header>
+
+<main>
+  <div class="card">
+    <p id="status">Loading model…</p>
+    <input type="file" id="file" accept="image/*">
+    <img id="preview" alt="Leaf preview">
+    <button id="predictBtn" disabled>Detect Disease</button>
+  </div>
+
+  <div class="card" id="output" style="display:none">
+    <h3 id="top"></h3>
+    <div id="bars"></div>
+    <div class="result" id="advice"></div>
+  </div>
+</main>
+
+<!-- ============ PART 3: JAVASCRIPT (logic) ============ -->
+
+<!-- 3a. Load the TensorFlow.js library -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+
+<script>
+/* 3b. Settings: your trained model and treatment advice */
+const MODEL_URL = "https://teachablemachine.withgoogle.com/models/6MpfNpo4p/";
+
+// Names must match your Teachable Machine classes exactly
+const ADVICE = {
+  "Healthy": "Leaf looks healthy. Keep monitoring.",
+  "Bacterial Spot": "Use copper sprays and disease-free seeds. Avoid wet foliage.",
+  "Early Blight": "Remove infected leaves, apply mancozeb or copper fungicide, rotate crops.",
+  "Late Blight": "Destroy infected plants, use chlorothalonil, avoid overhead watering.",
+  "Leaf Mold": "Improve ventilation, reduce humidity, apply fungicide.",
+  "Septoria Leaf Spot": "Remove lower infected leaves, mulch, apply fungicide.",
+  "Spider Mites": "Spray neem oil or miticide, increase humidity around plants.",
+  "Target Spot": "Prune for airflow, apply fungicide, remove crop debris.",
+  "Yellow Leaf Curl Virus": "Control whiteflies, remove infected plants, use resistant varieties.",
+  "Mosaic Virus": "Remove infected plants, disinfect tools, wash hands before handling."
+};
+
+/* 3c. Variables and page elements */
+let model, labels = [];
+const statusEl = document.getElementById("status");
+const fileEl = document.getElementById("file");
+const preview = document.getElementById("preview");
+const btn = document.getElementById("predictBtn");
+
+/* 3d. Load the model when the page opens */
+async function loadModel() {
+  try {
+    model = await tf.loadLayersModel(MODEL_URL + "model.json");
+    const meta = await (await fetch(MODEL_URL + "metadata.json")).json();
+    labels = meta.labels;
+    statusEl.textContent = "Model ready. Upload a leaf photo.";
+  } catch (e) {
+    statusEl.textContent = "Model not loaded. Check MODEL_URL and your internet.";
+    console.error(e);
+  }
+}
+
+/* 3e. Show the photo when the user picks one */
+fileEl.addEventListener("change", () => {
+  const f = fileEl.files[0];
+  if (!f) return;
+  preview.src = URL.createObjectURL(f);
+  preview.style.display = "block";
+  btn.disabled = !model;
+});
+
+/* 3f. Run the prediction when the button is clicked */
+btn.addEventListener("click", async () => {
+  btn.disabled = true;
+  statusEl.textContent = "Analysing…";
+
+  // Crop the centre square (same as Teachable Machine) and resize to 224x224
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 224;
+  const w = preview.naturalWidth, h = preview.naturalHeight;
+  const s = Math.min(w, h);
+  canvas.getContext("2d").drawImage(preview, (w - s) / 2, (h - s) / 2, s, s, 0, 0, 224, 224);
+
+  const probs = tf.tidy(() => {
+    const img = tf.browser.fromPixels(canvas)
+      .toFloat().div(127.5).sub(1)
+      .expandDims(0);
+    return model.predict(img);
+  });
+
+  const data = await probs.data();
+  probs.dispose();
+  showResult(Array.from(data));
+  statusEl.textContent = "Done.";
+  btn.disabled = false;
+});
+
+/* 3g. Display the result, confidence bars and advice */
+function showResult(p) {
+  const ranked = labels.map((l, i) => ({ l, v: p[i] })).sort((a, b) => b.v - a.v);
+  const best = ranked[0];
+
+  document.getElementById("output").style.display = "block";
+  document.getElementById("top").textContent =
+    `${best.l} (${(best.v * 100).toFixed(1)}%)`;
+
+  document.getElementById("bars").innerHTML = ranked.slice(0, 4).map(r =>
+    `<div>${r.l} - ${(r.v * 100).toFixed(1)}%</div>
+     <div class="bar"><div style="width:${r.v * 100}%"></div></div>`).join("");
+
+  document.getElementById("advice").textContent =
+    ADVICE[best.l] || "Consult your local agricultural officer for treatment advice.";
+}
+
+/* 3h. Start */
+loadModel();
+</script>
+</body>
+</html>
